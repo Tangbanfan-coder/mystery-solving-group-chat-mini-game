@@ -1,26 +1,31 @@
-/* 日出小队 —— 前端：渲染 + 向 GM 服务要下一屏 */
+/* 群聊解密壳 —— 前端：渲染 + 向 GM 服务要下一屏（不含任何具体剧情） */
 (function () {
   'use strict';
 
-  const S = window.STORY;
+  const PARAMS = new URLSearchParams(location.search);
+  const SCENARIO_ID = PARAMS.get('s') || PARAMS.get('scenario') || 'richu';
+  let S = null;
+
   const $ = (s, r) => (r || document).querySelector(s);
   const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   const state = {
-    sid: sessionStorage.getItem('richu.sid') || (Math.random().toString(36).slice(2) + Date.now().toString(36)),
-    clock: S.meta.startClock,
-    members: S.meta.members.slice(),
-    groupName: S.meta.groupName,
-    notice: { from: S.meta.noticeFrom, text: S.meta.notice, meta: S.meta.noticeMeta },
+    sid: sessionStorage.getItem('richu.sid.' + SCENARIO_ID) || (Math.random().toString(36).slice(2) + Date.now().toString(36)),
+    scenarioId: SCENARIO_ID,
+    clock: '06:15',
+    members: [],
+    groupName: '',
+    notice: { from: '', text: '', meta: '' },
     noticeLog: [],
     flags: {},
     focus: 'group',
     stack: [],
     ended: null,
+    endingObj: null,
     busy: true
   };
-  sessionStorage.setItem('richu.sid', state.sid);
+  sessionStorage.setItem('richu.sid.' + SCENARIO_ID, state.sid);
 
   const threads = {};
 
@@ -107,24 +112,15 @@
     return (s.logs.group || []).length > 0;
   }
 
-  function photoSvg(kind) {
-    if (kind !== 'xiaoman') return '';
-    return `<svg viewBox="0 0 392 248" width="100%">
-      <defs><linearGradient id="night" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" stop-color="#0d1218"/><stop offset=".55" stop-color="#1a222b"/><stop offset="1" stop-color="#0a0e13"/></linearGradient></defs>
-      <rect width="392" height="248" fill="url(#night)"/>
-      <rect x="0" y="196" width="392" height="52" fill="#14181d"/>
-      <rect x="34" y="88" width="196" height="66" rx="4" fill="#0b6b3a"/>
-      <rect x="34" y="88" width="196" height="66" rx="4" fill="none" stroke="#e8f0e9" stroke-width="2" opacity=".85"/>
-      <text x="48" y="118" font-size="21" font-family="PingFang SC,Microsoft YaHei,sans-serif" fill="#f2f7f2">松岭服务区</text>
-      <text x="48" y="140" font-size="12" font-family="PingFang SC,Microsoft YaHei,sans-serif" fill="#cfe3d4">SONGLING · 2km</text>
-      <rect x="238" y="112" width="6" height="120" fill="#3b444d"/>
-      <circle cx="241" cy="108" r="9" fill="#5a4a34" opacity=".9"/>
-      <rect x="0" y="210" width="392" height="3" fill="#2b333b" opacity=".8"/>
-      <text x="250" y="232" font-size="12" font-family="Consolas,monospace" fill="#c8d2cb" opacity=".85">2025-11-17 03:14</text>
-      <text x="16" y="232" font-size="10" font-family="Consolas,monospace" fill="#8e9a93" opacity=".7">IMG_0314.JPG</text>
-      <rect width="392" height="248" fill="#05070a" opacity=".12"/>
-    </svg>`;
+  function assetUrl(kind) {
+    return '/api/asset?id=' + encodeURIComponent(state.scenarioId) + '&kind=' + encodeURIComponent(kind);
+  }
+  function assetImg(kind, alt) {
+    const im = document.createElement('img');
+    im.src = assetUrl(kind);
+    im.alt = alt || '';
+    im.style.cssText = 'width:100%;display:block';
+    return im;
   }
 
   function render(th, m) {
@@ -189,7 +185,7 @@
       col.appendChild(card);
     } else if (m.type === 'img') {
       const card = el('div', 'img-card');
-      card.innerHTML = photoSvg(m.kind);
+      card.appendChild(assetImg(m.kind, m.cap));
       if (m.cap) card.appendChild(el('div', 'cap', m.cap));
       card.addEventListener('click', () => openPhoto(m));
       col.appendChild(card);
@@ -231,12 +227,18 @@
 
   function openPhoto(m) {
     $('#mapTitle').textContent = '图片';
-    $('#mapName').textContent = 'IMG_0314.JPG';
-    $('#mapAddr').textContent = '松岭服务区 · G65 包茂高速';
-    $('#mapMeta').textContent = '拍摄于 2025-11-17 03:14 · 距南门 203 公里';
+    $('#mapName').textContent = m.cap || '图片';
+    $('#mapAddr').textContent = '';
+    $('#mapMeta').textContent = '';
     const canvas = $('#mapCanvas');
-    canvas.innerHTML = `<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:16px">
-      <div style="width:100%;max-width:360px;border-radius:6px;overflow:hidden;box-shadow:0 10px 40px rgba(0,0,0,.35)">${photoSvg('xiaoman')}</div></div>`;
+    canvas.innerHTML = '';
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:16px';
+    const box = document.createElement('div');
+    box.style.cssText = 'width:100%;max-width:360px;border-radius:6px;overflow:hidden;box-shadow:0 10px 40px rgba(0,0,0,.35)';
+    box.appendChild(assetImg(m.kind, m.cap));
+    wrap.appendChild(box);
+    canvas.appendChild(wrap);
     $('#mapModal').classList.add('on');
     markSeen('photo');
   }
@@ -374,7 +376,7 @@
       const r = await fetch('/api/turn', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sid: state.sid, channel, text })
+        body: JSON.stringify({ sid: state.sid, scenario: state.scenarioId, channel, text })
       });
       data = await r.json();
       if (data.error) toast(data.error, 4000);
@@ -403,8 +405,8 @@
     scrollBottom(th, true);
   }
 
-  function showEnding(key) {
-    const e = S.endings[key] || S.endings.good;
+  function showEnding(e) {
+    if (!e || !e.title) return;
     const box = el('div', 'ending');
     box.innerHTML =
       '<div class="ending-in">' +
@@ -415,7 +417,7 @@
       '</div>';
     box.querySelector('.ending-btn').addEventListener('click', async () => {
       try { await fetch('/api/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sid: state.sid }) }); } catch (e2) {}
-      sessionStorage.removeItem('richu.sid');
+      sessionStorage.removeItem('richu.state.' + state.sid);
       location.reload();
     });
     $('#phone').appendChild(box);
@@ -551,7 +553,7 @@
     lines.push('');
     lines.push('- 导出时间：' + new Date().toLocaleString('zh-CN'));
     lines.push('- 群名：' + state.groupName + '（' + state.members.length + ' 人）');
-    lines.push('- 结局：' + (state.ended || '未结束'));
+    lines.push('- 结局：' + (state.ended && state.ended.id ? state.ended.id : '未结束'));
     lines.push('');
     const order = ['group'].concat(Object.keys(threads).filter((k) => k !== 'group'));
     order.forEach((k) => {
@@ -584,6 +586,23 @@
 
   /* ---------- 启动 ---------- */
   async function boot() {
+    try {
+      const r = await fetch('/api/scenario?id=' + encodeURIComponent(SCENARIO_ID));
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      S = await r.json();
+    } catch (e) {
+      document.body.innerHTML = '<div class="boot-err">剧本加载失败：' + e.message + '</div>';
+      return;
+    }
+
+    state.clock = S.meta.startClock || '06:15';
+    state.members = (S.meta.members || []).slice();
+    state.groupName = S.meta.groupName || S.title || '';
+    state.notice = { from: S.meta.noticeFrom || '', text: S.meta.notice || '', meta: S.meta.noticeMeta || '' };
+    document.title = S.title || state.groupName;
+    const ot = $('#outsideTitle');
+    if (ot) ot.textContent = (S.title || '') + (S.subtitle ? ' · ' + S.subtitle : '');
+
     const g = makeThread('group', '#chatInner', '#chat');
     $('#navName').textContent = state.groupName;
     $('#cellGroupName').textContent = state.groupName;
@@ -601,7 +620,7 @@
     $('#navMore').addEventListener('click', () => openView('viewInfo'));
     $('#cellNotice').addEventListener('click', () => openView('viewNotice'));
     $('#cellSearch').addEventListener('click', () => openView('viewSearch'));
-    $('#cellQuit').addEventListener('click', () => toast('退不出去。群里的人还在等你。', 3000));
+    $('#cellQuit').addEventListener('click', () => toast((S.meta && S.meta.quitText) || '退不出去。', 3000));
 
     $('#navBack').addEventListener('click', backToGroup);
     $$('[data-close]').forEach((b) => b.addEventListener('click', () => {
@@ -639,7 +658,6 @@
     $('#reset').addEventListener('click', async () => {
       if (!confirm('重新开始？当前进度会消失。')) return;
       try { await fetch('/api/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sid: state.sid }) }); } catch (e) {}
-      sessionStorage.removeItem('richu.sid');
       sessionStorage.removeItem('richu.state.' + state.sid);
       location.reload();
     });
@@ -659,7 +677,7 @@
       renderNotice();
       scrollBottom(g, true);
       if (state.ended) showEnding(state.ended);
-      $('#input').placeholder = '说点什么';
+      $('#input').placeholder = (S.meta && S.meta.inputPlaceholder) || '说点什么';
       return;
     }
 
@@ -678,7 +696,7 @@
     state.busy = false;
     document.body.classList.remove('busy');
     scrollBottom(g, true);
-    $('#input').placeholder = '说点什么';
+    $('#input').placeholder = (S.meta && S.meta.inputPlaceholder) || '说点什么';
   }
 
   document.addEventListener('DOMContentLoaded', boot);

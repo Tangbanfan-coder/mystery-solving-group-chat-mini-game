@@ -313,6 +313,7 @@ body.busy .send-btn{opacity:.4;pointer-events:none}
 .ending-btn:hover{background:rgba(80,160,110,.08)}
 
 /* 外部 */
+.boot-err{display:flex;align-items:center;justify-content:center;height:100%;padding:40px;color:#c98b8b;font-size:14px;line-height:1.8;text-align:center}
 .outside{text-align:center;color:#8d9aa3}
 .outside-title{font-size:13.5px;letter-spacing:2px;color:#cfdae1}
 .outside-sub{font-size:11.5px;margin-top:6px;letter-spacing:.5px;color:#6d7c86}

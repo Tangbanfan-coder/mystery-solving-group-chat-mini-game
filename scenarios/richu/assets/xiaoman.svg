@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 392 248" width="100%">
+  <defs>
+    <linearGradient id="night" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0d1218"/>
+      <stop offset=".55" stop-color="#1a222b"/>
+      <stop offset="1" stop-color="#0a0e13"/>
+    </linearGradient>
+  </defs>
+  <rect width="392" height="248" fill="url(#night)"/>
+  <rect x="0" y="196" width="392" height="52" fill="#14181d"/>
+  <rect x="34" y="88" width="196" height="66" rx="4" fill="#0b6b3a"/>
+  <rect x="34" y="88" width="196" height="66" rx="4" fill="none" stroke="#e8f0e9" stroke-width="2" opacity=".85"/>
+  <text x="48" y="118" font-size="21" font-family="PingFang SC,Microsoft YaHei,sans-serif" fill="#f2f7f2">松岭服务区</text>
+  <text x="48" y="140" font-size="12" font-family="PingFang SC,Microsoft YaHei,sans-serif" fill="#cfe3d4">SONGLING · 2km</text>
+  <rect x="238" y="112" width="6" height="120" fill="#3b444d"/>
+  <circle cx="241" cy="108" r="9" fill="#5a4a34" opacity=".9"/>
+  <rect x="0" y="210" width="392" height="3" fill="#2b333b" opacity=".8"/>
+  <text x="250" y="232" font-size="12" font-family="Consolas,monospace" fill="#c8d2cb" opacity=".85">2025-11-17 03:14</text>
+  <text x="16" y="232" font-size="10" font-family="Consolas,monospace" fill="#8e9a93" opacity=".7">IMG_0314.JPG</text>
+  <rect width="392" height="248" fill="#05070a" opacity=".12"/>
+</svg>
