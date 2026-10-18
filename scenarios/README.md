@@ -1,5 +1,7 @@
 # 剧本格式
 
+> v5 已接入；下面的字段说明是 v3 旧格式，仅作迁移参考。现行格式以 [SCHEMA.md](SCHEMA.md) 为准。
+
 一个剧本 = `scenarios/` 下的一个文件夹。放进去、在 `index.json` 里登记 id，刷新页面就能玩，**不用改任何代码**。
 
 ```
@@ -35,7 +37,7 @@ scenarios/
   "cover": "🌄",                     // 列表页封面（一个 emoji）
 
   "meta": {
-    "groupName": "日出小队·明早5点出发",  // 顶部群名
+    "groupName": "日出小队",             // 顶部群名（与 title 保持一致）
     "startClock": "06:15",              // 状态栏时间
     "notice": "5:00 南门集合…",          // 群公告
     "noticeFrom": "老K",
@@ -56,7 +58,7 @@ scenarios/
     "aqiao": { "knows": "…", "wants": "…", "voice": "…" }
   },
 
-  "intro": [ … ],       // 玩家打开页面时逐条播放的聊天，见下
+  "intro": [ … ],       // 历史 + live 开场，见下
   "archive": {          // "查找聊天记录"里能看到的东西
     "date": "今天 11月17日",
     "items": [ { "name": "老K", "time": "05:00", "text": "…", "gate": "archive" } ],
@@ -73,13 +75,21 @@ scenarios/
 
 ### intro 的条目
 
+`intro` 是一条时间线。`{ "t": "live" }` 是分界标记，本身不显示：
+
+- 标记**之前**是历史：进入页面时一次性铺好，不等待，也不显示"正在输入"。
+- 标记**之后**是 live：屏幕出现后逐条播放；成员消息默认先显示"正在输入"，每条之后停 `d` 毫秒。
+- 没有标记时整段都当历史直接显示。
+- live 段如果以 `time` 开头，状态栏从那个时间开始走；整段播完后跳到 `meta.startClock`（玩家开始操作的当前时间）。这样"已经发生的历史"和"正在发生的消息"时间线不会打架。
+
 ```jsonc
+{ "t": "live" }                                                       // 分界：之前预加载，之后 live
 { "t": "time",  "v": "06:02" }                                        // 时间分隔
 { "t": "sys",   "text": "「老K」邀请你加入了群聊", "tone": "ghost" }   // 居中系统提示
-{ "t": "msg",   "from": "laok", "text": "我到了。楼下。", "d": 700 }   // d=这条之前等多久
+{ "t": "msg",   "from": "laok", "text": "我到了。楼下。", "d": 700 }   // d=这条之后停多久（仅 live）
 { "t": "voice", "from": "aqiao", "dur": 7, "asr": "转文字内容" }
 { "t": "loc",   "from": "laok", "name": "松岭服务区", "addr": "…", "when": "共享于 03:14", "flag": "3 小时前" }
-{ "t": "msg",   "from": "laok", "text": "…", "fast": true }            // fast=不显示"正在输入"，快速带过
+{ "t": "msg",   "from": "laok", "text": "…", "fast": true }            // fast=不显示"正在输入"，快速带过（仅 live）
 ```
 
 ### beats（保底剧情）

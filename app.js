@@ -3,17 +3,22 @@
   'use strict';
 
   const PARAMS = new URLSearchParams(location.search);
-  const SCENARIO_ID = PARAMS.get('s') || PARAMS.get('scenario') || 'richu';
+  const SCENARIO_ID = PARAMS.get('s') || PARAMS.get('scenario') || '';
   let S = null;
+  let ASSET_KINDS = [];
+
+  // 壳不认识任何具体剧本：没有指定剧本就回列表页去选
+  if (!SCENARIO_ID) { location.replace('/'); return; }
 
   const $ = (s, r) => (r || document).querySelector(s);
   const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   const state = {
-    sid: sessionStorage.getItem('richu.sid.' + SCENARIO_ID) || (Math.random().toString(36).slice(2) + Date.now().toString(36)),
+    sid: sessionStorage.getItem('chat.sid.' + SCENARIO_ID) || (Math.random().toString(36).slice(2) + Date.now().toString(36)),
     scenarioId: SCENARIO_ID,
-    clock: '06:15',
+    bootId: '',
+    clock: '--:--',
     members: [],
     groupName: '',
     notice: { from: '', text: '', meta: '' },
@@ -23,9 +28,10 @@
     stack: [],
     ended: null,
     endingObj: null,
-    busy: true
+    busy: true,
+    introPlaying: false
   };
-  sessionStorage.setItem('richu.sid.' + SCENARIO_ID, state.sid);
+  sessionStorage.setItem('chat.sid.' + SCENARIO_ID, state.sid);
 
   const threads = {};
 
@@ -63,18 +69,22 @@
     if (!th.stick && !force) return;
     requestAnimationFrame(() => { th.chat.scrollTop = th.chat.scrollHeight; });
   }
-  function push(th, m) {
+  function push(th, m, opts) {
     th.log.push(m);
-    render(th, m);
-    scrollBottom(th);
-    if (th.key === 'group') persist();
+    if (th.key === 'group' || th.key === state.focus) {
+      render(th, m, opts);
+      scrollBottom(th);
+    }
+    if (!state.introPlaying) persist();
   }
 
   function persist() {
     try {
       const logs = {};
       Object.keys(threads).forEach((k) => { if (threads[k].log.length) logs[k] = threads[k].log; });
-      sessionStorage.setItem('richu.state.' + state.sid, JSON.stringify({
+      sessionStorage.setItem('chat.state.' + state.sid, JSON.stringify({
+        v: 5,
+        bootId: state.bootId,
         clock: state.clock,
         members: state.members,
         groupName: state.groupName,
@@ -89,11 +99,11 @@
 
   function restore() {
     let raw;
-    try { raw = sessionStorage.getItem('richu.state.' + state.sid); } catch (e) { return false; }
+    try { raw = sessionStorage.getItem('chat.state.' + state.sid); } catch (e) { return false; }
     if (!raw) return false;
     let s;
     try { s = JSON.parse(raw); } catch (e) { return false; }
-    if (!s || !s.logs) return false;
+    if (!s || s.v !== 5 || s.bootId !== state.bootId || !s.logs) return false;
     state.clock = s.clock || state.clock;
     state.members = s.members || state.members;
     state.groupName = s.groupName || state.groupName;
@@ -103,7 +113,10 @@
     state.ended = s.ended || null;
     Object.keys(s.logs).forEach((k) => {
       if (k === 'group') {
-        (s.logs[k] || []).forEach((m) => { threads.group.log.push(m); render(threads.group, m); });
+        (s.logs[k] || []).forEach((m) => {
+          threads.group.log.push(m);
+          render(threads.group, m, { instant: true });
+        });
       } else {
         const th = makeThread(k, '#privInner', '#privChat');
         th.log = s.logs[k] || [];
@@ -123,7 +136,7 @@
     return im;
   }
 
-  function render(th, m) {
+  function render(th, m, opts) {
     const box = th.inner;
     if (m.type === 'time') { box.appendChild(el('div', 'time-div', m.v)); return; }
     if (m.type === 'sys') {
@@ -146,7 +159,7 @@
     }
 
     const self = m.from === 'me';
-    const row = el('div', 'row' + (self ? ' self' : ''));
+    const row = el('div', 'row' + (self ? ' self' : '') + (opts && opts.instant ? ' instant' : ''));
     row.appendChild(avatarEl(m.from));
     const col = el('div', 'col');
     if (!self) {
@@ -264,7 +277,8 @@
       a.style.setProperty('--c2', m.c2 || '#5f5f5f');
       d.appendChild(a);
       d.appendChild(el('span', null, m.id === 'me' ? '你' : m.name));
-      d.addEventListener('click', () => { if (m.id !== 'me') openPrivate(m.id); });
+      // 中途加入的群演（u:）没有私聊人设，不给开窗口
+      d.addEventListener('click', () => { if (m.id !== 'me' && !String(m.id).startsWith('u:')) openPrivate(m.id); });
       list.appendChild(d);
     });
   }
@@ -289,29 +303,47 @@
     $('#clock').textContent = v;
   }
 
-  async function playEvents(th, events) {
+  // 同一套时序同时服务两种场景：
+  // - 开场历史（instant: true）：只铺内容，不等待、不显示"正在输入"
+  // - 开场 live / 回合事件：按发送者节奏逐条出现；intro 时认 d（这条之后停多久）和 fast（跳过输入中）
+  async function playSequence(th, events, opts) {
+    const intro = !!(opts && opts.intro);
+    const instant = !!(opts && opts.instant);
+    const pushOpt = instant ? { instant: true } : undefined;
+
     for (const e of events) {
-      if (e.t === 'msg') {
-        await typing(th, e.from);
-        push(th, { type: 'text', from: e.from, text: e.text });
-        await sleep(560 + Math.min(500, (e.text || '').length * 12));
+      if (!e) continue;
+      if (e.t === 'time') {
+        push(th, { type: 'time', v: e.v }, pushOpt);
+        if (opts && opts.clock) applyClock(e.v);
+        if (!instant) await sleep(intro ? (e.d != null ? e.d : 260) : 0);
+      } else if (e.t === 'msg') {
+        if (!instant && !(intro && e.fast)) await typing(th, e.from);
+        push(th, { type: 'text', from: e.from, text: e.text }, pushOpt);
+        if (!instant) {
+          await sleep(intro
+            ? (e.d != null ? e.d : (e.fast ? 220 : 700))
+            : 560 + Math.min(500, (e.text || '').length * 12));
+        }
       } else if (e.t === 'voice') {
-        await typing(th, e.from);
-        push(th, { type: 'voice', from: e.from, dur: e.dur, asr: e.asr });
-        await sleep(800);
+        if (!instant) await typing(th, e.from);
+        push(th, { type: 'voice', from: e.from, dur: e.dur, asr: e.asr }, pushOpt);
+        if (!instant) await sleep(intro ? (e.d != null ? e.d : 700) : 800);
       } else if (e.t === 'sys') {
-        await sleep(420);
-        push(th, { type: 'sys', text: e.text, tone: e.tone });
+        if (!instant && !intro) await sleep(420);
+        push(th, { type: 'sys', text: e.text, tone: e.tone }, pushOpt);
+        if (!instant && intro) await sleep(e.d != null ? e.d : 320);
       } else if (e.t === 'recall') {
-        await sleep(380);
-        push(th, { type: 'recall', from: e.from, text: e.text });
+        if (!instant) await sleep(intro ? (e.d != null ? e.d : 300) : 380);
+        push(th, { type: 'recall', from: e.from, text: e.text }, pushOpt);
       } else if (e.t === 'loc') {
-        await typing(th, e.from);
-        push(th, { type: 'loc', from: e.from, name: e.name, addr: e.addr, when: e.when, flag: e.flag });
-        await sleep(600);
+        // 位置卡不是"打字"发出来的，开场 live 不显示正在输入
+        if (!instant && !intro) await typing(th, e.from);
+        push(th, { type: 'loc', from: e.from, name: e.name, addr: e.addr, when: e.when, flag: e.flag }, pushOpt);
+        if (!instant) await sleep(intro ? (e.d != null ? e.d : 650) : 600);
       } else if (e.t === 'img') {
-        await sleep(500);
-        push(th, { type: 'img', from: e.from, kind: e.kind || 'xiaoman', cap: e.cap });
+        if (!instant) await sleep(e.d != null ? e.d : 500);
+        push(th, { type: 'img', from: e.from, kind: e.kind || ASSET_KINDS[0] || '', cap: e.cap }, pushOpt);
         state.flags.photo = true;
         markSeen('photo');
       } else if (e.t === 'rename') {
@@ -319,12 +351,12 @@
         $('#navName').textContent = e.name;
         $('#cellGroupName').textContent = e.name;
         document.title = e.name;
-        push(th, { type: 'sys', text: '群名已修改为「' + e.name + '」', tone: 'warn' });
+        push(th, { type: 'sys', text: '群名已修改为「' + e.name + '」', tone: 'warn' }, pushOpt);
       } else if (e.t === 'notice') {
         state.notice = { from: e.by || '默', text: e.text, meta: '刚刚' };
         state.noticeLog.unshift({ by: e.by || '默', text: e.text });
         renderNotice();
-        push(th, { type: 'sys', text: '「' + (e.by || '默') + '」修改了群公告', tone: 'warn' });
+        push(th, { type: 'sys', text: '「' + (e.by || '默') + '」修改了群公告', tone: 'warn' }, pushOpt);
       } else if (e.t === 'join' || e.t === 'leave') {
         if (e.t === 'join') {
           if (!state.members.find((m) => m.name === e.name)) {
@@ -334,7 +366,7 @@
           state.members = state.members.filter((m) => m.name !== e.name);
         }
         updateMembers();
-        push(th, { type: 'sys', text: e.text || ('「' + e.name + '」' + (e.t === 'join' ? '加入了群聊' : '退出了群聊')), tone: e.t === 'join' ? 'ghost' : 'warn' });
+        push(th, { type: 'sys', text: e.text || ('「' + e.name + '」' + (e.t === 'join' ? '加入了群聊' : '退出了群聊')), tone: e.t === 'join' ? 'ghost' : 'warn' }, pushOpt);
       }
     }
   }
@@ -355,7 +387,28 @@
       body: JSON.stringify({ sid: state.sid, kind })
     }).catch(() => {});
     state.flags[kind] = true;
-    persist();
+    if (!state.introPlaying) persist();
+  }
+
+  function ensurePrivate(id) {
+    const key = 'p:' + id;
+    let th = threads[key];
+    if (!th) th = makeThread(key, '#privInner', '#privChat');
+    return th;
+  }
+
+  async function playDmEvents(list) {
+    for (const d of list || []) {
+      const key = String(d && d.channel || '');
+      if (!key.startsWith('p:')) continue;
+      let th = threads[key];
+      if (!th) th = makeThread(key, '#privInner', '#privChat');
+      const focused = state.focus === key;
+      await playSequence(th, d.events || [], { instant: !focused });
+      if (!focused && (d.events || []).some((e) => e && e.t !== 'sys')) {
+        toast(memberOf(key.slice(2)).name + '给你发了一条私聊', 3200);
+      }
+    }
   }
 
   /* ---------- 回合 ---------- */
@@ -363,7 +416,7 @@
     if (state.busy || state.ended) return;
     state.busy = true;
     document.body.classList.add('busy');
-    const th = channel === 'group' ? threads.group : threads[channel];
+    const th = channel === 'group' ? threads.group : (threads[channel] || ensurePrivate(channel.slice(2)));
 
     if (channel === 'group') { push(th, { type: 'text', from: 'me', text }); }
     else { push(th, { type: 'text', from: 'me', text }); }
@@ -386,8 +439,9 @@
     $('#typing').classList.remove('on');
 
     if (data && data.events) {
-      await playEvents(th, data.events);
+      await playSequence(th, data.events);
       applyClock(data.clock);
+      if (data.dmEvents && data.dmEvents.length) await playDmEvents(data.dmEvents);
       if (data.unlock && data.unlock.includes('archive') && !state.flags.archive) {
         state.flags.archive = true;
         persist();
@@ -417,7 +471,7 @@
       '</div>';
     box.querySelector('.ending-btn').addEventListener('click', async () => {
       try { await fetch('/api/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sid: state.sid }) }); } catch (e2) {}
-      sessionStorage.removeItem('richu.state.' + state.sid);
+      sessionStorage.removeItem('chat.state.' + state.sid);
       location.reload();
     });
     $('#phone').appendChild(box);
@@ -477,11 +531,11 @@
 
   /* ---------- 私聊 ---------- */
   function showPriv(th) {
-    if (state.currentPriv === th.key) return;
     const inner = $('#privInner');
     inner.innerHTML = '';
     th.log.forEach((m) => render(th, m));
     state.currentPriv = th.key;
+    scrollBottom(th, true);
   }
 
   function openPrivate(id) {
@@ -548,8 +602,9 @@
 
   /* ---------- 导出 ---------- */
   function exportLog() {
+    const title = state.groupName || (S && S.title) || '对话';
     const lines = [];
-    lines.push('# 日出小队 · 对话记录');
+    lines.push('# ' + title + ' · 对话记录');
     lines.push('');
     lines.push('- 导出时间：' + new Date().toLocaleString('zh-CN'));
     lines.push('- 群名：' + state.groupName + '（' + state.members.length + ' 人）');
@@ -576,7 +631,7 @@
     const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = '日出小队_对话.md';
+    a.download = title.replace(/[\\/:*?"<>|]/g, '-') + '_对话.md';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -595,10 +650,26 @@
       return;
     }
 
-    state.clock = S.meta.startClock || '06:15';
+    ASSET_KINDS = Object.keys(S.assets || {});
+    state.bootId = S.bootId || '';
+    state.clock = S.meta.startClock || '--:--';
     state.members = (S.meta.members || []).slice();
     state.groupName = S.meta.groupName || S.title || '';
     state.notice = { from: S.meta.noticeFrom || '', text: S.meta.notice || '', meta: S.meta.noticeMeta || '' };
+
+    // 群创建信息由剧本声明；没声明就整行不显示，别把所有剧本都写成同一个群主
+    const note = $('#footerNote');
+    if (note) {
+      const by = String(S.meta.createdBy || '').trim();
+      const at = String(S.meta.createdAt || '').trim();
+      if (by) {
+        note.textContent = '本群由 ' + by + (at ? ' 于 ' + at : '') + ' 创建';
+        note.hidden = false;
+      } else {
+        note.textContent = '';
+        note.hidden = true;
+      }
+    }
     document.title = S.title || state.groupName;
     const ot = $('#outsideTitle');
     if (ot) ot.textContent = (S.title || '') + (S.subtitle ? ' · ' + S.subtitle : '');
@@ -658,7 +729,7 @@
     $('#reset').addEventListener('click', async () => {
       if (!confirm('重新开始？当前进度会消失。')) return;
       try { await fetch('/api/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sid: state.sid }) }); } catch (e) {}
-      sessionStorage.removeItem('richu.state.' + state.sid);
+      sessionStorage.removeItem('chat.state.' + state.sid);
       location.reload();
     });
 
@@ -668,6 +739,7 @@
     const restored = restore();
     if (restored) {
       state.busy = false;
+      state.introPlaying = false;
       document.body.classList.remove('busy');
       applyClock(state.clock);
       $('#navName').textContent = state.groupName;
@@ -681,21 +753,36 @@
       return;
     }
 
+    // intro 是一条时间线：{ "t": "live" } 之前是历史，进入即铺好；之后是 live，逐条出现。
+    const intro = Array.isArray(S.intro) ? S.intro : [];
+    const liveAt = intro.findIndex((m) => m && m.t === 'live');
+    const history = liveAt >= 0 ? intro.slice(0, liveAt) : intro;
+    const opening = liveAt >= 0 ? intro.slice(liveAt + 1) : [];
+    const startClock = (S.meta && S.meta.startClock) || state.clock;
+    // live 段以 time 开头时，状态栏从那个时间开始走；不写就沿用 startClock
+    const entryClock = (opening[0] && opening[0].t === 'time' && opening[0].v) || startClock;
+
     state.busy = true;
-    for (const m of S.intro) {
-      if (m.t === 'time') { push(g, { type: 'time', v: m.v }); await sleep(260); }
-      else if (m.t === 'sys') { push(g, { type: 'sys', text: m.text, tone: m.tone }); await sleep(300); }
-      else if (m.t === 'loc') { push(g, { type: 'loc', from: m.from, name: m.name, addr: m.addr, when: m.when, flag: m.flag }); await sleep(400); }
-      else if (m.t === 'voice') { await typing(g, m.from); push(g, { type: 'voice', from: m.from, dur: m.dur, asr: m.asr }); await sleep(600); }
-      else if (m.t === 'msg') {
-        if (!m.fast) await typing(g, m.from);
-        push(g, { type: 'text', from: m.from, text: m.text });
-        await sleep(m.fast ? 150 : (m.d || 500));
-      }
+    state.introPlaying = true;
+    document.body.classList.add('busy');
+
+    if (opening.length) applyClock(entryClock);
+
+    // 历史：只铺内容，不等待、不显示"正在输入"
+    await playSequence(g, history, { intro: true, instant: true });
+    scrollBottom(g, true);
+
+    if (opening.length) {
+      await sleep(500);
+      await playSequence(g, opening, { intro: true, clock: true });
     }
+
+    state.introPlaying = false;
+    applyClock(startClock);
     state.busy = false;
     document.body.classList.remove('busy');
     scrollBottom(g, true);
+    persist();
     $('#input').placeholder = (S.meta && S.meta.inputPlaceholder) || '说点什么';
   }
 

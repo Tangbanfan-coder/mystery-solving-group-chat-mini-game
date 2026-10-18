@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>日出小队</title>
+<title>群聊</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -13,7 +13,7 @@
 
     <!-- 状态栏 -->
     <div class="statusbar">
-      <span class="clock" id="clock">06:15</span>
+      <span class="clock" id="clock">--:--</span>
       <span class="statusbar-right">
         <svg class="sig" viewBox="0 0 18 12" width="18" height="12"><rect x="0" y="8" width="3" height="4" rx="1"/><rect x="4.5" y="6" width="3" height="6" rx="1"/><rect x="9" y="3.5" width="3" height="8.5" rx="1"/><rect x="13.5" y="1" width="3" height="11" rx="1"/></svg>
         <svg class="wifi" viewBox="0 0 16 12" width="16" height="12"><path d="M8 10.4a1.2 1.2 0 1 0 0-2.4 1.2 1.2 0 0 0 0 2.4Z"/><path d="M4.8 7.2a4.5 4.5 0 0 1 6.4 0" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M2 4.4a8.5 8.5 0 0 1 12 0" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
@@ -26,7 +26,7 @@
       <button class="nav-back" id="navBack" aria-label="返回">
         <svg viewBox="0 0 24 24" width="22" height="22"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
-      <div class="nav-title" id="navTitle"><span id="navName">日出小队</span><span class="nav-count" id="navCount">(5)</span></div>
+      <div class="nav-title" id="navTitle"><span id="navName"></span><span class="nav-count" id="navCount"></span></div>
       <button class="nav-more" id="navMore" aria-label="更多">
         <svg viewBox="0 0 24 24" width="22" height="22"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>
       </button>
@@ -84,7 +84,7 @@
         <div class="cell-group">
           <button class="cell" id="cellNotice"><span>群公告</span><span class="cell-arrow">›</span></button>
           <button class="cell" id="cellSearch"><span>查找聊天记录</span><span class="cell-arrow">›</span></button>
-          <div class="cell"><span>群聊名称</span><span class="cell-val" id="cellGroupName">日出小队</span></div>
+          <div class="cell"><span>群聊名称</span><span class="cell-val" id="cellGroupName"></span></div>
         </div>
         <div class="cell-group">
           <div class="cell"><span>消息免打扰</span><span class="switch on"></span></div>
@@ -93,7 +93,7 @@
         <div class="cell-group">
           <button class="cell danger" id="cellQuit">删除并退出</button>
         </div>
-        <div class="footer-note">本群由 老K 于 11月16日 23:47 创建</div>
+        <div class="footer-note" id="footerNote" hidden></div>
       </div>
     </section>
 

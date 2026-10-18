@@ -7,6 +7,7 @@ const { gmTurn, loadScenario, listScenarios, KEY } = require('./gm');
 const ROOT = __dirname;
 const PORT = Number(process.env.PORT || 5178);
 const HOST = '127.0.0.1';
+const BOOT_ID = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -21,8 +22,44 @@ const MIME = {
 
 const sessions = new Map();
 
-function newSession(scenarioId, prior) {
-  return { scenarioId, turn: 0, clock: null, flags: {}, history: [], ended: null, prior: prior || '', facts: [], moved: false, grace: {}, startedAt: Date.now() };
+function newSession(sc, sid, prior) {
+  const npcs = {};
+  (sc.meta.members || []).forEach((m) => {
+    if (m.id === 'me') return;
+    const c = sc.cast[m.id] || {};
+    npcs[m.id] = {
+      memory: [],
+      knowledge: c.knows || '',
+      mood: '',
+      goal: '',
+      inbox: []
+    };
+  });
+  const initial = sc.state && sc.state.initial ? JSON.parse(JSON.stringify(sc.state.initial)) : {};
+  const phase = (sc.arc && sc.arc[0] && sc.arc[0].id) || '';
+  return {
+    sid,
+    scenarioId: sc.id,
+    turn: 0,
+    clock: sc.meta.startClock || null,
+    phase,
+    state: initial,
+    publicFacts: [],
+    npcs,
+    threads: {},
+    playedSetpieces: [],
+    ended: null,
+    prior: prior || '',
+    history: [],
+    flags: {},
+    groupName: sc.meta.groupName || '',
+    notice: {
+      from: sc.meta.noticeFrom || '',
+      text: sc.meta.notice || '',
+      meta: sc.meta.noticeMeta || ''
+    },
+    startedAt: Date.now()
+  };
 }
 
 function readBody(req) {
@@ -44,22 +81,39 @@ function json(res, code, obj) {
   res.end(JSON.stringify(obj));
 }
 
+function persist(s) {
+  try {
+    const dir = path.join(ROOT, '_sessions');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir);
+    fs.writeFileSync(
+      path.join(dir, encodeURIComponent(s.sid || 'default') + '.json'),
+      JSON.stringify(s, null, 1)
+    );
+  } catch (e) { /* 落盘失败不影响游戏 */ }
+}
+
 // 开场转成"已经发生过的对话"，喂给模型
 function buildPrior(sc) {
   const name = {};
   (sc.meta.members || []).forEach((m) => { name[m.id] = m.name; });
+  const nm = (id) => name[id] || String(id || '').replace(/^u:/, '');
   return (sc.intro || []).map((m) => {
     if (m.t === 'time') return '\n【' + m.v + '】';
     if (m.t === 'sys') return '· ' + m.text;
-    if (m.t === 'msg') return (name[m.from] || m.from) + '：' + m.text;
-    if (m.t === 'voice') return (name[m.from] || m.from) + '：[语音 ' + m.dur + '″] ' + (m.asr || '');
-    if (m.t === 'loc') return (name[m.from] || m.from) + '：[位置] ' + m.name + '（' + (m.when || '') + '）' + (m.flag || '');
+    if (m.t === 'msg') return nm(m.from) + '：' + m.text;
+    if (m.t === 'voice') return nm(m.from) + '：[语音 ' + m.dur + '″] ' + (m.asr || '');
+    if (m.t === 'loc') return nm(m.from) + '：[位置] ' + m.name + '（' + (m.when || '') + '）' + (m.flag || '');
+    if (m.t === 'img') return nm(m.from) + '：[图片] ' + (m.cap || '');
+    if (m.t === 'rename') return '· 群名被改成「' + m.name + '」';
+    if (m.t === 'notice') return '· 群公告被改成「' + m.text + '」';
+    if (m.t === 'join') return '· 「' + m.name + '」加入了群聊';
+    if (m.t === 'leave') return '· 「' + m.name + '」离开了群聊';
     return '';
   }).filter(Boolean).join('\n');
 }
 
 function publicScenario(sc) {
-  // 只给浏览器看它需要的：剧透内容（canon / style / pacing / director / endings）一律不发
+  // 只给浏览器看它需要的：剧透内容（canon / style / cast / state / arc / endings / setpieces）一律不发
   return {
     id: sc.id,
     title: sc.title,
@@ -69,123 +123,56 @@ function publicScenario(sc) {
     intro: sc.intro,
     archive: sc.archive,
     assets: sc.assets,
-    rules: sc.rules || {}
+    rules: sc.rules || {},
+    bootId: BOOT_ID
   };
-}
-
-function eventsToText(events) {
-  return events.map((e) => {
-    if (e.t === 'msg') return e.from + '：' + e.text;
-    if (e.t === 'sys') return '系统：' + e.text;
-    if (e.t === 'recall') return '系统：' + e.from + ' 撤回了一条消息';
-    if (e.t === 'rename') return '系统：群名被修改为「' + e.name + '」';
-    if (e.t === 'notice') return '系统：群公告被修改为「' + e.text + '」';
-    if (e.t === 'join') return '系统：「' + e.name + '」加入了群聊';
-    if (e.t === 'leave') return '系统：「' + e.name + '」退出了群聊';
-    if (e.t === 'voice') return e.from + '：[语音] ' + e.asr;
-    if (e.t === 'loc') return e.from + '：[位置] ' + e.name;
-    return '';
-  }).filter(Boolean).join('\n');
-}
-
-function pickEnding(sc, s, intent) {
-  for (const e of sc.endings || []) {
-    const w = e.when || {};
-    if (w.intent && w.intent !== intent) continue;
-    if (w.minTurn && s.turn < w.minTurn) continue;
-    if (w.flags && !w.flags.every((f) => s.flags[f])) continue;
-    return e;
-  }
-  return null;
 }
 
 async function handleTurn(req, res) {
   const body = JSON.parse(await readBody(req));
   const sid = String(body.sid || 'default');
-  const scenarioId = String(body.scenario || 'richu');
+  const scenarioId = String(body.scenario || '');
+  if (!scenarioId) return json(res, 400, { error: '缺少 scenario', events: [] });
   const sc = loadScenario(scenarioId);
 
   let s = sessions.get(sid);
   if (!s || s.scenarioId !== scenarioId) {
-    s = newSession(scenarioId, buildPrior(sc));
+    s = newSession(sc, sid, buildPrior(sc));
     s.clock = sc.meta.startClock;
     sessions.set(sid, s);
   }
   if (s.ended) return json(res, 200, { events: [], ended: true });
 
-  const channel = body.channel === 'group' || !body.channel ? 'group' : body.channel;
-  const whoMap = { 'p:laok': 'laok', 'p:aqiao': 'aqiao', 'p:shiqi': 'shiqi', 'p:mo': 'mo' };
-  const who = whoMap[channel] || '';
+  // 私聊频道形如 p:<成员id>，成员表由剧本声明。对不上就明确拒绝，
+  // 别把一个陌生频道交给随机演员，让回复落进错的会话。
+  const channel = !body.channel || body.channel === 'group' ? 'group' : String(body.channel);
+  let who = '';
+  if (channel !== 'group') {
+    const target = channel.startsWith('p:') ? channel.slice(2) : '';
+    const memberIds = (sc.meta.members || []).map((m) => m.id);
+    if (!target || target === 'me' || !memberIds.includes(target)) {
+      return json(res, 400, { error: '这个人不在群里', events: [] });
+    }
+    who = target;
+  }
   const text = String(body.text || '').slice(0, 300);
   if (!text) return json(res, 400, { error: 'empty' });
 
   let out;
   try {
-    out = await gmTurn({
-      scenario: sc,
-      channel,
-      text,
-      history: s.history,
-      state: { turn: s.turn, clock: s.clock || sc.meta.startClock, flags: s.flags, prior: s.prior, facts: s.facts, moved: s.moved, who }
-    });
+    out = await gmTurn({ scenario: sc, session: s, channel, text, who });
   } catch (e) {
     return json(res, 500, { error: 'GM 掉线了：' + e.message, events: [] });
   }
 
-  s.turn += 1;
-  if (out.clock && /^\d{1,2}:\d{2}$/.test(out.clock)) s.clock = out.clock;
-  if (out.facts.length) s.facts = s.facts.concat(out.facts).slice(-15);
-  out.unlock.forEach((k) => { s.flags[k] = true; });
-  out.events.forEach((e) => {
-    if (e.t === 'rename' || e.t === 'notice') s.flags.renamed = true;
-    if (e.t === 'img') s.flags.photo = true;
+  persist(s);
+  json(res, 200, {
+    events: out.events,
+    dmEvents: out.dmEvents,
+    clock: s.clock,
+    unlock: out.unlock,
+    ending: out.ending
   });
-
-  // 剧本配置的关键节点保底
-  if (channel === 'group') {
-    for (const b of sc.beats || []) {
-      if (s.turn >= b.atTurn && !s.flags[b.flag]) {
-        s.flags[b.flag] = true;
-        (b.events || []).forEach((ev) => out.events.push(ev));
-        (b.unlock || []).forEach((u) => { s.flags[u] = true; out.unlock.push(u); });
-      }
-    }
-  }
-
-  // 结局判定
-  let ending = null;
-  if (channel === 'group') {
-    const hit = pickEnding(sc, s, out.intent);
-    if (hit) {
-      const grace = Number(hit.grace || 0);
-      const used = s.grace[hit.id] || 0;
-      if (used < grace) {
-        s.grace[hit.id] = used + 1;
-        const seen = new Set(out.events.map((e) => e.text || ''));
-        (hit.graceEvents || []).forEach((ev) => {
-          if (!seen.has(ev.text)) out.events.push(ev);
-        });
-      } else {
-        ending = { id: hit.id, title: hit.title, text: hit.text };
-        s.ended = hit.id;
-      }
-    }
-  }
-
-  s.history.push({ role: 'user', content: (channel === 'group' ? '' : '（私聊）') + text });
-  s.history.push({ role: 'assistant', content: JSON.stringify({ events: out.events, intent: out.intent }) });
-  if (s.history.length > 60) s.history = s.history.slice(-60);
-
-  try {
-    const dir = path.join(ROOT, '_sessions');
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir);
-    fs.writeFileSync(
-      path.join(dir, encodeURIComponent(sid) + '.json'),
-      JSON.stringify({ sid, scenario: scenarioId, turn: s.turn, clock: s.clock, flags: s.flags, moved: s.moved, ended: s.ended, history: s.history }, null, 1)
-    );
-  } catch (e) { /* 落盘失败不影响游戏 */ }
-
-  json(res, 200, { events: out.events, clock: s.clock, unlock: out.unlock, ending });
 }
 
 async function handleSeen(req, res) {
@@ -193,7 +180,10 @@ async function handleSeen(req, res) {
   const sid = String(body.sid || 'default');
   const s = sessions.get(sid);
   const kind = String(body.kind || '');
-  if (s && kind) s.flags[kind] = true;
+  if (s && kind) {
+    s.flags[kind] = true;
+    persist(s);
+  }
   json(res, 200, { ok: true, flags: s ? s.flags : {} });
 }
 
@@ -243,7 +233,9 @@ const server = http.createServer(async (req, res) => {
 
   if (urlPath === '/api/scenario') {
     try {
-      const sc = loadScenario(String(url.searchParams.get('id') || 'richu'));
+      const scenarioId = String(url.searchParams.get('id') || '');
+      if (!scenarioId) return json(res, 400, { error: '缺少 id' });
+      const sc = loadScenario(scenarioId);
       return json(res, 200, publicScenario(sc));
     } catch (e) {
       return json(res, 404, { error: e.message });
@@ -272,6 +264,6 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`[game] http://${HOST}:${PORT}  key=${KEY ? 'ok' : 'MISSING'}`);
+  console.log(`[game] http://${HOST}:${PORT}  key=${KEY ? 'ok' : 'MISSING'}  boot=${BOOT_ID}`);
   console.log('[scenarios] ' + listScenarios().map((s) => s.id).join(', '));
 });
