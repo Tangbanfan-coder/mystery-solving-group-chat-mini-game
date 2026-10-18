@@ -92,6 +92,7 @@ function sceneOf(sc) {
 
 function transcriptOf(history, sc, limit) {
   const map = memberMap(sc);
+  const nm = (id) => (map[id] ? map[id].name : id);
   const out = [];
   (history || []).forEach((m) => {
     if (m.role === 'user') {
@@ -101,17 +102,25 @@ function transcriptOf(history, sc, limit) {
     try {
       const o = JSON.parse(m.content);
       (o.events || []).forEach((e) => {
-        if (e.t === 'msg') out.push((map[e.from] ? map[e.from].name : e.from) + '：' + e.text);
+        if (e.t === 'msg') out.push(nm(e.from) + '：' + e.text);
         else if (e.t === 'sys') out.push('· ' + e.text);
+        else if (e.t === 'voice') out.push(nm(e.from) + '：[语音] ' + e.asr);
+        else if (e.t === 'loc') out.push(nm(e.from) + '：[位置] ' + e.name + '（' + (e.when || '') + '）' + (e.flag || ''));
+        else if (e.t === 'img') out.push(nm(e.from) + '：[图片] ' + (e.cap || ''));
         else if (e.t === 'rename') out.push('· 群名被改成「' + e.name + '」');
         else if (e.t === 'notice') out.push('· 群公告被改成「' + e.text + '」');
         else if (e.t === 'join') out.push('· 「' + e.name + '」加入了群聊');
         else if (e.t === 'leave') out.push('· 「' + e.name + '」离开了群聊');
-        else if (e.t === 'recall') out.push('· ' + (map[e.from] ? map[e.from].name : e.from) + ' 撤回了一条消息');
+        else if (e.t === 'recall') out.push('· ' + nm(e.from) + ' 撤回了一条消息');
       });
     } catch (e) { /* 忽略 */ }
   });
   return out.slice(-(limit || 18)).join('\n');
+}
+
+function clipTail(s, n) {
+  if (!s) return '';
+  return s.length > n ? '…' + s.slice(-n) : s;
 }
 
 function directorBlock(sc, state) {
@@ -242,6 +251,11 @@ function actorMessages(sc, state, actor, brief) {
     .filter((m) => m.id !== 'me' && m.id !== actor.id)
     .map((m) => m.name).join('、');
 
+  const recent = [
+    state.prior ? clipTail(state.prior, 900) : '',
+    transcriptOf(state.history, sc, 16)
+  ].filter(Boolean).join('\n');
+
   const sys = `你是「${map[actor.id] ? map[actor.id].name : actor.id}」，在一个叫「${sc.meta.groupName}」的微信群里。现在是 ${state.clock || sc.meta.startClock}。
 群里还有：${others}，还有一个玩家（群里显示为「你」，提到他时就用「你」，要 @ 就写「@你」）。
 
@@ -258,9 +272,12 @@ ${c.voice || ''}
 1. 你只知道自己上面写的那些事。你不知道的，就是不知道，不要编，也不要突然知道。
 2. 不要说出你的秘密，不要解释设定，不要跳出角色。
 3. 群里的消息你都能看见（下面就是），但你只回你想回的。
+4. **每行消息前面都是发送者的名字。你是「${map[actor.id] ? map[actor.id].name : actor.id}」，只代表你自己。**
+   别人发的东西（位置、图片、语音）不许认领成自己发的；要提到，就点名说「老K 发的那条」。
+5. 你只写你自己的话。别替别人说话，也别假装替别人道歉或解释。
 
-【群里最近发生的事】
-${transcriptOf(state.history, sc, 16) || '（群里还很安静）'}
+【群里之前和最近发生的事】
+${recent || '（群里还很安静）'}
 
 【这一轮你打算】
 ${brief || '随便说一句，符合你的性格。'}
