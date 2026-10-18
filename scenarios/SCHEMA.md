@@ -178,6 +178,7 @@
     "id": "good",
     "title": "南 门 证 人",
     "when": "玩家没有上车，手里有截图或私聊证据，并明确报警。",
+    "trigger": { "policeThreat": 3, "hasEvidence": true },
     "minTurn": 10,
     "text": "……"
   },
@@ -192,7 +193,7 @@
 ```
 
 - `when` 是自然语言，只给 GM 读；引擎不做语义匹配。
-- `trigger`（可选）：状态硬门槛，只在 GM 没提结局时兜底；只比较 `state` 的键值，不做文本匹配。比如 `{ "playerAt": "home" }` 表示玩家已经被 GM 记录为到家，`minTurn` 到了就直接结束。它是防止 GM 拖着不收的安全网，不替代 GM 的语义判断。
+- `trigger`（可选）：状态硬门槛，只在 GM 没提结局时兜底；只比较 `state` 的键值，不做文本匹配。比如 `{ "playerAt": "home" }` 表示玩家已经被记录为要回家，`minTurn` 到了就直接结束；`{ "policeThreat": 3, "hasEvidence": true }` 表示玩家已经报警且有证据。`hasEvidence` 由引擎在记录员写入 `evidence` 时置位。它是防止 GM 拖着不收的安全网，不替代 GM 的语义判断。
 - `minTurn` 是硬门槛；GM 提前提结局会被引擎拒绝并重试一次。
 - 不设 `when.intent` / `when.flags`；状态在 `state` 里，由 GM 判断。
 - 不设 `grace` / `graceEvents`；需要“第一次警告”就写进 `when`，由 GM 用 `state.warnings` 跟踪。
@@ -342,13 +343,14 @@
 引擎在每回合开始先调一次“记录员”，只根据玩家这句话更新 state；它不演 NPC、不写台词。GM 看到的是更新后的 state。
 
 ```jsonc
-{ "at": "car" | null, "committed": true | false | null, "policeThreat": 0 | 1 | 2 | 3 | null, "evidence": ["..."] }
+{ "at": "car" | null, "committed": true | false | null, "policeThreat": 0 | 1 | 2 | 3 | null, "evidence": ["..."], "hiddenEvidence": true | false | null }
 ```
 
 - `at`：`south_gate` / `walking` / `home` / `b2` / `car` / `unknown`；没明确位置就 `null`。玩家明确表达“我要回家了 / 我回家了”就写 `home`，不要求已经到家；“我不走了 / 我不回家了”可以改回 `south_gate`；“我要上车”是 `walking`，“我上车了”才是 `car`。
 - `committed`：是否已经做出不可逆动作（回家 / 上车 / 进地库 / 报警）。
 - `policeThreat`：0–3。
 - `evidence`：截图 / 录音 / 照片等，最多 3 条。
+- `hiddenEvidence`：证据里是否有小满照片 / 小满“别去”截图、03:14 或松岭定位卡、能指向松岭的私聊口供；给 `hidden` 的 trigger 用。
 - 记录员的话就是事实：玩家说“我上车了”，即使 NPC 没看见，也写 `car`；NPC 的怀疑留给 `npcs` 的 knowledge / mood。
 - 引擎在 GM 之后会再应用一次记录员结果，防止 GM 把玩家位置改回旧值。
 - 失败时保留原 state，不阻塞回合。
@@ -385,7 +387,7 @@
 - `validateScenario`：`version` / `id` / `meta.members` / `cast` 覆盖非 me 成员 / `endings[].id` 唯一 / `endings[].trigger` 是对象（可选）/ `defaultEnding` 存在 / `maxTurns` / `state.initial` 是对象 / `arc[].id` 唯一 / `setpieces[].id` 唯一。
 - `validateGm`：`state` 是对象 / `knowledge` 的 key 是 NPC / `active` id 合法 / `setpieces` id 合法且未投放 / `events` 类型合法 / `privateMessages` 的 `from` 是 system 角色、`to` 合法 / `ending.id` 存在。
 - `validateActor`：`pass` 布尔 / `events` 类型合法 / `private.to` 合法 / `leak` 布尔 / 长度上限。
-- `validateTracker`：`at` 在允许值内 / `committed` 布尔 / `policeThreat` 0–3 / `evidence` 字符串数组；越界丢弃。
+- `validateTracker`：`at` 在允许值内 / `committed` 布尔 / `policeThreat` 0–3 / `evidence` 字符串数组 / `hiddenEvidence` 布尔；越界丢弃。
 
 ### 7.2 不做什么
 
@@ -529,6 +531,7 @@
       "id": "good",
       "title": "南 门 证 人",
       "when": "玩家没有上车，手里有截图或私聊证据，并明确报警。",
+      "trigger": { "policeThreat": 3, "hasEvidence": true },
       "minTurn": 10,
       "text": "……"
     },
@@ -536,6 +539,7 @@
       "id": "hidden",
       "title": "第 六 个 人",
       "when": "玩家报警，且手里有小满照片、03:14 定位卡或私聊口供，能指向松岭。",
+      "trigger": { "policeThreat": 3, "hiddenEvidence": true },
       "minTurn": 10,
       "text": "……"
     },

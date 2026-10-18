@@ -24,6 +24,7 @@
     notice: { from: '', text: '', meta: '' },
     noticeLog: [],
     flags: {},
+    unread: {},
     focus: 'group',
     stack: [],
     ended: null,
@@ -91,6 +92,7 @@
         notice: state.notice,
         noticeLog: state.noticeLog,
         flags: state.flags,
+        unread: state.unread,
         ended: state.ended,
         logs
       }));
@@ -110,6 +112,7 @@
     state.notice = s.notice || state.notice;
     state.noticeLog = s.noticeLog || [];
     state.flags = s.flags || {};
+    state.unread = s.unread || {};
     state.ended = s.ended || null;
     Object.keys(s.logs).forEach((k) => {
       if (k === 'group') {
@@ -277,6 +280,8 @@
       a.style.setProperty('--c2', m.c2 || '#5f5f5f');
       d.appendChild(a);
       d.appendChild(el('span', null, m.id === 'me' ? '你' : m.name));
+      const unread = state.unread[m.id] || 0;
+      if (unread > 0) d.appendChild(el('span', 'badge', unread > 9 ? '9+' : String(unread)));
       // 中途加入的群演（u:）没有私聊人设，不给开窗口
       d.addEventListener('click', () => { if (m.id !== 'me' && !String(m.id).startsWith('u:')) openPrivate(m.id); });
       list.appendChild(d);
@@ -404,9 +409,14 @@
       let th = threads[key];
       if (!th) th = makeThread(key, '#privInner', '#privChat');
       const focused = state.focus === key;
+      const hasMsg = (d.events || []).some((e) => e && e.t !== 'sys');
       await playSequence(th, d.events || [], { instant: !focused });
-      if (!focused && (d.events || []).some((e) => e && e.t !== 'sys')) {
-        toast(memberOf(key.slice(2)).name + '给你发了一条私聊', 3200);
+      if (!focused && hasMsg) {
+        const id = key.slice(2);
+        state.unread[id] = (state.unread[id] || 0) + 1;
+        updateMembers();
+        persist();
+        toast(memberOf(id).name + '给你发了一条私聊', 3200);
       }
     }
   }
@@ -550,6 +560,9 @@
     showPriv(th);
     $('#privTitle').textContent = m.name;
     state.focus = key;
+    state.unread[id] = 0;
+    updateMembers();
+    if (!state.introPlaying) persist();
     openView('viewPrivate');
     scrollBottom(th, true);
   }

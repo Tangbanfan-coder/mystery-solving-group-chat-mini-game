@@ -320,11 +320,12 @@ south_gate / walking / home / b2 / car / unknown
 - 没有明确位置就不改，at=null。
 - “我报警了 / 我打了110” -> policeThreat=3；“我要报警 / 再这样我报警” -> policeThreat=1 或 2。
 - “我截图了 / 我录了音 / 我有照片” -> evidence 加对应字符串。
+- 如果 evidence 里出现小满的照片 / 小满“别去”的截图、03:14 或松岭定位卡、或能指向松岭的私聊口供 -> hiddenEvidence=true；否则 false/null。
 - 玩家的话就是事实；不要因为 NPC 不信、没看见、或者剧情里没人承认而改。
 - 你没有明确依据时，宁可返回 null，不要猜。
 
 只输出一个 JSON 对象，不要解释、不要代码块：
-{ "at": "car" | null, "committed": true | false | null, "policeThreat": 0 | 1 | 2 | 3 | null, "evidence": ["..."] }`;
+{ "at": "car" | null, "committed": true | false | null, "policeThreat": 0 | 1 | 2 | 3 | null, "evidence": ["..."], "hiddenEvidence": true | false | null }`;
   return [{ role: 'system', content: sys }, { role: 'user', content: text2 }];
 }
 
@@ -337,6 +338,7 @@ async function runTracker(sc, session, text2) {
     if (typeof obj.committed === 'boolean') out.committed = obj.committed;
     if (obj.policeThreat != null && Number.isFinite(Number(obj.policeThreat))) out.policeThreat = clamp(obj.policeThreat, 0, 3);
     if (Array.isArray(obj.evidence)) out.evidence = obj.evidence.map((x) => str(x, 60)).filter(Boolean).slice(0, 3);
+    if (typeof obj.hiddenEvidence === 'boolean') out.hiddenEvidence = obj.hiddenEvidence;
     return out;
   } catch (e) {
     console.log('[tracker] 失败：' + e.message);
@@ -349,10 +351,12 @@ function applyTracked(session, t) {
   if (t.at) session.state.playerAt = t.at;
   if (t.committed != null) session.state.playerCommitted = !!t.committed;
   if (t.policeThreat != null) session.state.policeThreat = t.policeThreat;
+  if (t.hiddenEvidence != null) session.state.hiddenEvidence = !!t.hiddenEvidence;
   if (t.evidence && t.evidence.length) {
     const cur = Array.isArray(session.state.evidence) ? session.state.evidence : [];
     t.evidence.forEach((e) => { if (!cur.includes(e)) cur.push(e); });
     session.state.evidence = cur.slice(-6);
+    session.state.hasEvidence = true;
   }
 }
 
@@ -524,6 +528,7 @@ ${code}
 4. 你不知道的事就是不知道；不要突然知道。
 5. 你可以 pass；不想说话就 pass。
 6. ${opts.channel === 'group' ? 'events 会发到群里；private 会私聊给指定的人。' : 'events 会直接回给玩家；private 可以私聊别的 NPC。'}
+7. 玩家要求私聊，或你要说不能进群的话，用 private 发给 player；不要只在群里答应“私聊”却什么都不发。
 
 只输出一个 JSON 对象，不要解释、不要代码块：
 {
